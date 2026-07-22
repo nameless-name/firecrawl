@@ -1,0 +1,104 @@
+# ============================================================
+# Firecrawl Docker Compose Override
+# ============================================================
+# 此文件由 `docker compose` 自动加载，与 docker-compose.yaml 合并使用。
+# 功能：
+#   - 使用预编译镜像替代本地构建
+#   - 添加 SearXNG 搜索引擎（可选）
+#   - 添加 MCP Server
+#   - 对外暴露端口（局域网访问）
+# ============================================================
+# 使用: docker compose up -d
+#       (会自动合并 docker-compose.override.yaml)
+# ============================================================
+
+services:
+  api:
+    build: !reset null
+    image: ghcr.io/firecrawl/firecrawl:latest
+    ports: !reset []
+    # environment:
+    #   SEARXNG_ENDPOINT: http://searxng:8080 # 指定为 compose 内部署的 SearXNG
+    depends_on:
+      redis:
+        condition: service_started
+      playwright-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      # searxng:
+      #   condition: service_started
+
+  playwright-service:
+    build: !reset null
+    image: ghcr.io/firecrawl/playwright-service:latest
+
+  nuq-postgres:
+    build: !reset null
+    image: ghcr.io/firecrawl/nuq-postgres:latest
+
+# ==================== 禁用 FoundationDB ====================
+  foundationdb:
+    deploy:
+      replicas: 0
+  foundationdb-init:
+    deploy:
+      replicas: 0
+
+# ==================== SearXNG 搜索引擎 ====================
+  # searxng:
+  #   image: docker.io/searxng/searxng:latest
+  #   restart: always
+  #   networks:
+  #     - backend
+  #   volumes:
+  #     - ./searxng-config:/etc/searxng/:Z
+  #     - searxng-data:/var/cache/searxng/
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "10m"
+  #       max-file: "3"
+  #       compress: "true"
+
+  # searxng-redis:
+  #   image: docker.io/valkey/valkey:9-alpine
+  #   command: valkey-server --save 30 1 --loglevel warning
+  #   restart: always
+  #   networks:
+  #     - backend
+  #   volumes:
+  #     - searxng-redis-data:/data/
+
+  # ==================== MCP Server ====================
+  mcp-server:
+    image: ghcr.io/firecrawl/firecrawl-mcp-server:latest
+    restart: always
+    networks:
+      - backend
+    environment:
+      FIRECRAWL_API_URL: http://api:3002
+      HTTP_STREAMABLE_SERVER: "true" # 启动 HTTP MCP 服务
+      HOST: "0.0.0.0"
+      FIRECRAWL_NO_SEARCH_FEEDBACK: "true"
+      FIRECRAWL_NO_ENDPOINT_FEEDBACK: "true"
+    ports:
+      - "0.0.0.0:${MCP_PORT:-8080}:8080" # 指定地址和端口，对局域网开放
+    depends_on:
+      - api
+    volumes:
+      # 挂载修改后的编译产物覆盖官方镜像中的 dist/index.js，移除不可用工具，避免 agent 浪费资源尝试
+      # 修改参考 https://github.com/nameless-name/firecrawl-mcp-server
+      # 修改后需要编译 docker run --rm -v ./firecrawl-mcp-server:/app -w /app ghcr.io/firecrawl/firecrawl-mcp-server:latest sh -c "npm run build"
+      - ../firecrawl-mcp-server/dist/index.js:/app/dist/index.js:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+
+# ==================== SearXNG 数据卷 ====================
+# volumes:
+#   searxng-data:
+#   searxng-redis-data:
